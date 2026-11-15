@@ -6,7 +6,7 @@ import { createServer, type Server } from "http";
 // CENTRAL CONFIGURATION
 // --------------------------------------------------
 
-const CONFIG_SHEET_ID = "1ZT9oh-HC5TauAGyjtCaXYkdz4iiGd5esKmpdghVV2qo";
+const CONFIG_SHEET_ID = "1Krqt3ZyReRPePf-p9ixxhhE-ojAdx7kjDo1Elbqtw3U";
 const CONFIG_TAB_NAME = "Sheet1";
 
 interface ColumnMappings {
@@ -87,10 +87,11 @@ function parseCsvLine(line: string): string[] {
   return values;
 }
 
+
 async function loadConfig(): Promise<AppConfig> {
   const configUrl =
     `https://docs.google.com/spreadsheets/d/${CONFIG_SHEET_ID}/gviz/tq` +
-    `?tqx=out:csv&sheet=${encodeURIComponent(CONFIG_TAB_NAME)}`;
+    `?tqx=out:csv&sheet=${encodeURIComponent(CONFIG_TAB_NAME)}&headers=1`;
 
   const response = await fetch(configUrl);
 
@@ -100,57 +101,59 @@ async function loadConfig(): Promise<AppConfig> {
 
   const csv = await response.text();
 
-  const values = csv
+  // Parse the CSV response.
+  const rows = csv
     .trim()
     .split(/\r?\n/)
-    .map((line) => parseCsvLine(line)[0] || "");
+    .map((line) => parseCsvLine(line));
 
-  // return {
-  //   sheetId: values[0],
-  //   apiKey: values[1],
-  //   merchantsRange: values[2],
-  //   volunteersRange: values[3],
-  //   appsScriptUrl: values[4],
+  // The first CSV row contains the column labels.
+  // The second CSV row contains the actual configuration.
+  const values = rows[1]?.map((value) => value.trim());
 
-  //   columns: {
-  //     businessName: values[5],
-  //     category: values[6],
-  //     street: values[7],
-  //     municipality: values[8],
-  //     state: values[9],
-  //     contactPerson: values[10],
-  //     phone: values[11],
-  //     email: values[12],
-  //     previousAdSize: values[13],
-  //     assignedTo: values[14],
-  //     volunteerName: values[15],
-  //     previousSolicitor: values[16]
-  //   },
-  // }; temporarily disable the long-term maintanance feature
+  if (!values || values.length < 17) {
+    console.error("Unexpected configuration response:", {
+      rowCount: rows.length,
+      rows: rows.map((row) => ({
+        columns: row.length,
+        firstValue: row[0],
+      })),
+    });
+
+    throw new Error("Could not load configuration data");
+  }
+
+  console.log("Configuration loaded successfully:", {
+    sheetId: values[0],
+    apiKeyLoaded: !!values[1],
+    merchantsRange: values[2],
+    volunteersRange: values[3],
+  });
 
   return {
-    sheetId: "1Ex4MUGhPFf2B7OW53F2jisJJIsV16FFEmqRTwV-C6e0",
-    apiKey: "AIzaSyBBJEfU6h_PQfVN4_H2eAo5spS0ZP6rsmc",
-    merchantsRange: "current_year_merchmaster!A:Z",
-    volunteersRange: "thisyears_importallfundraisers!A:A",
-    appsScriptUrl: "https://script.google.com/macros/s/AKfycbxQSWH_8mP7fn-53LdUEzWFdS2q-3HiSIMTzEYOz7n6LIyItx4dgpY2REvN9m3-Gz25/exec",
+    sheetId: values[0],
+    apiKey: values[1],
+    merchantsRange: values[2],
+    volunteersRange: values[3],
+    appsScriptUrl: values[4],
 
     columns: {
-      businessName: "E",
-      category: "L",
-      street: "F",
-      municipality: "I",
-      state: "J",
-      contactPerson: "O",
-      phone: "M",
-      email: "N",
-      previousAdSize: "Y",
-      assignedTo: "D",
-      volunteerName: "A",
-      previousSolicitor: "Q",
-    }
-  }
+      businessName: values[5],
+      category: values[6],
+      street: values[7],
+      municipality: values[8],
+      state: values[9],
+      contactPerson: values[10],
+      phone: values[11],
+      email: values[12],
+      previousAdSize: values[13],
+      assignedTo: values[14],
+      volunteerName: values[15],
+      previousSolicitor: values[16],
+    },
+  };
 }
+
 
 // --------------------------------------------------
 // GOOGLE SHEETS CACHE
