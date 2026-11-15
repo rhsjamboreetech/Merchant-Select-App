@@ -6,8 +6,22 @@ import { createServer, type Server } from "http";
 // CENTRAL CONFIGURATION
 // --------------------------------------------------
 
-const CONFIG_SHEET_ID = "1Krqt3ZyReRPePf-p9ixxhhE-ojAdx7kjDo1Elbqtw3U";
-const CONFIG_TAB_NAME = "Sheet1";
+// Runtime environment variable pointing to the CENTRAL
+// configuration spreadsheet, not the merchant spreadsheet.
+const CONFIG_SHEET_ID = process.env.SHEET_ID;
+const CONFIG_TAB_NAME = process.env.SHEET_TAB_NAME || "Webapp_Setup";
+
+if (!CONFIG_SHEET_ID) {
+  throw new Error(
+    "Missing SHEET_ID environment variable. It must contain the central configuration spreadsheet ID."
+  );
+}
+
+if (!CONFIG_SHEET_ID) {
+  throw new Error(
+    "Missing SHEET_ID environment variable. It must contain the central configuration spreadsheet ID."
+  );
+}
 
 interface ColumnMappings {
   businessName: string;
@@ -41,6 +55,10 @@ function columnLetterToIndex(column: string): number {
   let index = 0;
 
   for (const character of column.trim().toUpperCase()) {
+    if (character < "A" || character > "Z") {
+      throw new Error(`Invalid Google Sheets column letter: ${column}`);
+    }
+
     index = index * 26 + character.charCodeAt(0) - 64;
   }
 
@@ -54,7 +72,7 @@ function getCell(row: string[], column: string): string {
 }
 
 // --------------------------------------------------
-// CENTRAL CONFIGURATION LOADER
+// CSV PARSING
 // --------------------------------------------------
 
 // Parse an individual CSV line, including quoted values
@@ -87,72 +105,99 @@ function parseCsvLine(line: string): string[] {
   return values;
 }
 
+// --------------------------------------------------
+// CENTRAL CONFIGURATION LOADER
+// --------------------------------------------------
+
+
 
 async function loadConfig(): Promise<AppConfig> {
   const configUrl =
     `https://docs.google.com/spreadsheets/d/${CONFIG_SHEET_ID}/gviz/tq` +
-    `?tqx=out:csv&sheet=${encodeURIComponent(CONFIG_TAB_NAME)}&headers=1`;
+    `?tqx=out:csv&sheet=${encodeURIComponent(CONFIG_TAB_NAME)}&headers=0`;
 
   const response = await fetch(configUrl);
 
   if (!response.ok) {
-    throw new Error("Failed to load central configuration");
+    throw new Error(
+      `Failed to load central configuration: ${response.status} ${response.statusText}`
+    );
   }
 
   const csv = await response.text();
 
-  // Parse the CSV response.
-  const rows = csv
+  // Column A = configuration index
+  // Column B = configuration value
+  // Column C = description
+  const configValues = new Map<number, string>();
+
+  const lines = csv
+    .replace(/^\uFEFF/, "")
     .trim()
-    .split(/\r?\n/)
-    .map((line) => parseCsvLine(line));
+    .split(/\r?\n/);
 
-  // The first CSV row contains the column labels.
-  // The second CSV row contains the actual configuration.
-  const values = rows[1]?.map((value) => value.trim());
+  for (const line of lines) {
+    if (!line.trim()) continue;
 
-  if (!values || values.length < 17) {
-    console.error("Unexpected configuration response:", {
-      rowCount: rows.length,
-      rows: rows.map((row) => ({
-        columns: row.length,
-        firstValue: row[0],
-      })),
-    });
+    const row = parseCsvLine(line);
 
-    throw new Error("Could not load configuration data");
+    const indexText = row[0]?.trim();
+    const value = row[1]?.trim() ?? "";
+
+    // Skip headers, blank rows, and non-numeric indices.
+    if (!indexText || !/^\d+$/.test(indexText)) continue;
+
+    const index = Number(indexText);
+
+    if (value) {
+      configValues.set(index, value);
+    }
   }
 
-  console.log("Configuration loaded successfully:", {
-    sheetId: values[0],
-    apiKeyLoaded: !!values[1],
-    merchantsRange: values[2],
-    volunteersRange: values[3],
-  });
+  // Ensure all 17 configuration entries exist.
+  for (let i = 0; i < 17; i++) {
+    if (!configValues.has(i)) {
+      throw new Error(
+        `Missing configuration value at index ${i} (column A index: ${i}).`
+      );
+    }
+  }
 
-  return {
-    sheetId: values[0],
-    apiKey: values[1],
-    merchantsRange: values[2],
-    volunteersRange: values[3],
-    appsScriptUrl: values[4],
+  const getValue = (index: number): string =>
+    configValues.get(index)!;
+
+  const config: AppConfig = {
+    sheetId: getValue(0),
+    apiKey: getValue(1),
+    merchantsRange: getValue(2),
+    volunteersRange: getValue(3),
+    appsScriptUrl: getValue(4),
 
     columns: {
-      businessName: values[5],
-      category: values[6],
-      street: values[7],
-      municipality: values[8],
-      state: values[9],
-      contactPerson: values[10],
-      phone: values[11],
-      email: values[12],
-      previousAdSize: values[13],
-      assignedTo: values[14],
-      volunteerName: values[15],
-      previousSolicitor: values[16],
+      businessName: getValue(5),
+      category: getValue(6),
+      street: getValue(7),
+      municipality: getValue(8),
+      state: getValue(9),
+      contactPerson: getValue(10),
+      phone: getValue(11),
+      email: getValue(12),
+      previousAdSize: getValue(13),
+      assignedTo: getValue(14),
+      volunteerName: getValue(15),
+      previousSolicitor: getValue(16),
     },
   };
+
+  console.log("Central configuration loaded successfully:", {
+    sheetIdPresent: Boolean(config.sheetId),
+    apiKeyPresent: Boolean(config.apiKey),
+    configurationEntries: configValues.size,
+  });
+
+  return config;
 }
+
 
 
 // --------------------------------------------------
@@ -225,7 +270,6 @@ function simpleFormatAddress(
 // --------------------------------------------------
 
 export async function registerRoutes(app: Express): Promise<Server> {
-
   // Load configuration once at startup.
   const config = await loadConfig();
 
@@ -267,8 +311,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             getCell(row, config.columns.state)
           ),
 
-          contact_person:
-            getCell(row, config.columns.contactPerson),
+          contact_person: getCell(
+            row,
+            config.columns.contactPerson
+          ),
 
           phone:
             getCell(row, config.columns.phone) ||
@@ -286,7 +332,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           assigned_to:
             getCell(row, config.columns.assignedTo) || null,
-          
+
           previous_solicitor:
             getCell(row, config.columns.previousSolicitor) || null,
         }))
@@ -296,7 +342,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
 
       res.json(merchants);
-
     } catch (error) {
       console.error("Error fetching merchants:", error);
 
@@ -346,7 +391,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       res.json(volunteers);
-
     } catch (error) {
       console.error("Error fetching volunteers:", error);
 
@@ -395,7 +439,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(400).json({
         message: data.message || "Assignment failed",
       });
-
     } catch (error) {
       console.error("Assignment error:", error);
 
@@ -468,7 +511,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }));
 
       res.json(assignments);
-
     } catch (error) {
       console.error("Error fetching assignments:", error);
 
